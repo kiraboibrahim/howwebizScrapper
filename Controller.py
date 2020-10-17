@@ -156,14 +156,15 @@ class Scrapper:
             self.__printError("Failed to save file: {}".format(e))
             exit(0)
         return True
-    def logFailedDownloads(self, trackObj):
+    def logFailedDownloads(self):
         """Log partial downloads so that one can retrying downloading them 
 
         Args:
             trackObj (object): An instance of  Track 
         """
         with open("./partialDownloads.part", "w+") as failedDownloads:
-           pickle.dump(trackObj, failedDownloads)
+            #Dump the queue Object in order to complete incomplete downloads
+            pickle.dump(self.queue, failedDownloads)
     def __printError(self, message):
         """Prints error messages to the screen
 
@@ -293,4 +294,8 @@ try:
 except KeyboardInterrupt:
     print "[-] Process Interrupted"
     exit(0)
-#There is need to fix the bug: Downloading data before counting results fetched
+except:
+    # Log the failed downloads if any error occurs
+    scrapper.logFailedDownloads()
+    print "[-] UNknown error has occured but unfinished downloads have been logged, you can resume by running downloadFix.py"
+    exit(0)
