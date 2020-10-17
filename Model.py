@@ -42,7 +42,7 @@ class HowweModel:
         else:
             raise ValueError("Failed to run query: {}".format(self.query))
     def writeTrack(self, trackObj):
-        self.query = 'INSERT INTO tracks(artist_id, track_name, track_thumbnail, track_size) VALUES({}, "{}", "{}", "{}");'.format(trackObj.artist_id, trackObj.trackName, trackObj.trackAvatar, trackObj.size)
+        self.query = 'INSERT INTO tracks(artist_id, track_name, track_thumbnail, alternate_download_link, track_size) VALUES({}, "{}", "{}", "{}", "{}");'.format(trackObj.artist_id, trackObj.trackName, trackObj.trackAvatar, trackObj.downloadLink, trackObj.size)
         self.__run()
     def __run(self):
         try:
@@ -69,10 +69,15 @@ class HowweModel:
         else:
             raise ValueError("Failed to run query: {}".format(self.query))
     def trackExists(self, trackObj):
-        self.query = "SELECT * FROM tracks WHERE track_name='{}';".format(trackObj.trackName)
-        self.dbCursor.execute(self.query)
-        if self.dbCursor.rowcount:
-            return True
-        return False
+        #Take note: There are collabo songs that have more than on singer, so the song belongs to more than one artiste and so there is need to know if a specific artiste has that song in the database, so this method will return a dictionary of artist IDs 
+        self.query = "SELECT artist_id FROM tracks WHERE track_name='{}';".format(trackObj.trackName)
+        if self.__run():
+            if self.dbCursor.rowcount:
+                return self.dbCursor.fetchall()
+            else:
+                return None
+        else:
+            raise ValueError("Failed to run query: {}".format(self.query))
+        
         
         

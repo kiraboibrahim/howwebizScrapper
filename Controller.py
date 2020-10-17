@@ -7,6 +7,7 @@
 import requests, os, pickle
 from bs4 import BeautifulSoup as bs
 from Model import HowweModel
+from argparse import ArgumentParser
 # For saving songs, and writing them to the database
 from settings import DEFAULT_DIR, DB_NAME
 
@@ -70,6 +71,9 @@ class Scrapper:
         self.howwebizUrl = "https://www.howwebiz.ug"
         #Other attributes to be filled in later, initialized with empty strings for the start
         self.artistObj = self.getArtistDetails(Artist(artistName, "", "", ""))
+        #Prepare the artiste's directory
+        self.createArtistDirectory()
+        #This is link that goes to the page that contains the songs of the singer
         self.musicUrl = "{}/{}/music".format(self.howwebizUrl, self.artistObj.artistName)
         self.fileType = "mp3" # Default filet ype for howwebiz website
         self.queue = Queue() # Will hold the all track Objects
@@ -88,7 +92,13 @@ class Scrapper:
         artist_id = self.model.artistExists(artistObj)
         #assign the artist id property to the artist Object
         artistObj.artist_id = artist_id    
-        return artistObj     
+        return artistObj 
+    def createArtistDirectory(self):
+        #Change to the current directory
+        os.chdir(DEFAULT_DIR)  
+        if not os.path.exists(DEFAULT_DIR + "/{}".format(self.artistObj.artistName)):
+            #create the directory if it doesnot exist
+            os.mkdir(self.artistObj.artistName)  
     def download(self, pageUrl = None, binary = False):
         """Downloads data 
 
@@ -140,7 +150,7 @@ class Scrapper:
         """
        
         try:
-            with open("{}/{}.{}".format(DEFAULT_DIR, trackObj.trackName, self.fileType), "wb") as f:
+            with open("{}/{}/{}.{}".format(DEFAULT_DIR, self.artistObj.artistName, trackObj.trackName, self.fileType), "wb") as f:
                 f.write(trackObj.data)
         except Exception as e:
             self.__printError("Failed to save file: {}".format(e))
@@ -172,44 +182,37 @@ class Scrapper:
         # Get the track that is always put on the left in the a-music-left container
         track = bsObj.find("div", class_="a-music-left").find("a")
         # Get all the track details: trackName, trackAvatar, trackURL, song names contain a minus sign which results in error in mysql, so replacing it with . and when rendering output process will be reversed
-        trackName = str(track.find("h3").getText()).replace("-", ".")
+        trackName = str(track.find("h3").getText())
         trackAvatar = str(track.find("img").get("src"))
         trackURL = str(track.get("href"))
-        track.artist_id = self.artistObj.artist_id
         # Create Track object to store all the details
         trackObj = Track(trackName, trackAvatar, URL = trackURL)
-        if  not self.model.trackExists(trackObj) and not os.path.exists("{}/{}.{}".format(DEFAULT_DIR, trackObj.trackName, self.fileType)):
-            # There are some other deatils requierd like downloadSize, Track Download link, Binary data of the track
-            otherTrackDetails = self._getTrackDetails(trackObj)
-            trackObj.downloadLink = otherTrackDetails[0]
-            trackObj.size = otherTrackDetails[1]
-            trackObj.data = otherTrackDetails[2]
-        # Add to queue
-        self.queue.enqueue(trackObj)
+        trackObj.artist_id = self.artistObj.artist_id
+        #Check all the artist ids for the song downloading and check if the singer entered already has that song in the database
+        artistIDs = self.model.trackExists(trackObj)
+        if ((artistIDs is None) or (trackObj.artist_id not in [dict_['artist_id'] for dict_ in artistIDs])):
+            # Add to queue
+            self.queue.enqueue(trackObj)
         
         #  Get the rest of the songs that are contained in the newreleases container
         musicContainers = bsObj.findAll("div", class_="newreleases")
         #Iterate over the containers and extract all song details
-        """for container in musicContainers:
+        for container in musicContainers:
             # Get all the tracks container div elements
             trackContainers = container.findAll("div", class_= "span_1_of_4")
             for trackContainer in trackContainers:
                 track= trackContainer.find("a") # Eah song is contained in an a tag
-                trackName = str(track.find("h3").getText()).replace("-", ".") # The song title is contained in h3 tag
+                trackName = str(track.find("h3").getText())# The song title is contained in h3 tag
                 trackURL = str(track.get("href")) # Extract the url of the song, the url directs to download page
                 trackAvatar = str(track.find("img").get("src")) # The image used for the song || album image
                 # Create Track Object to hold details above
                 trackObj = Track(trackName, trackAvatar, URL = trackURL)
                 trackObj.artist_id = self.artistObj.artist_id
-                #Check if a track exists in the database and its downloaded before adding it to a queue
-                if (self.model.trackExists(trackObj) and os.path.exists("{}/{}.{}".format(DEFAULT_DIR, trackObj.trackName, self.fileType))):
-                    continue
-                # There are some other deatils requierd like downloadSize, Track Download link, Binary data of the track
-                otherTrackDetails = self._getTrackDetails(trackObj)
-                trackObj.downloadLink = otherTrackDetails[0]
-                trackObj.size = otherTrackDetails[1]
-                trackObj.data = otherTrackDetails[2]
-                self.queue.enqueue(trackObj)"""
+                #Check all the artist ids for the song downloading and check if the singer entered already has that song in the database
+                artistIDs = self.model.trackExists(trackObj)
+                if ((artistIDs is None) or (trackObj.artist_id not in [dict_['artist_id'] for dict_ in artistIDs])):
+                    # Add to queue
+                    self.queue.enqueue(trackObj)
         #Check if there is a next page
         if nextPageURL is None:
             # Exit the function
@@ -228,31 +231,46 @@ class Scrapper:
             list: The remaining data is stored in the list
         """
         trackDownloadLinkContainer = bs(self.download(pageUrl = trackObj.URL), "html.parser").select("div.download--link")[0]
-        trackDownloadLink = str(trackDownloadLinkContainer.select("a.download-song")[0].get("href"))
-        trackDownloadSize = str(trackDownloadLinkContainer.find("span").getText()).strip().strip("MB")
-        # Get Binary data to write to file
-        print "[+] Downloading binary data for {}... DONOT EXIT".format(trackObj.trackName)
-        trackBinaryData = self.download(pageUrl = trackDownloadLink, binary = True)
-        print [trackDownloadLink, trackDownloadSize]
-        return [trackDownloadLink, trackDownloadSize, trackBinaryData]
+        trackDownloadLink = self.howwebizUrl +"/"+ str(trackDownloadLinkContainer.select("a.download-song")[0].get("href"))
+        trackDownloadSize = str(trackDownloadLinkContainer.find("span").getText()).strip().strip("MB").strip()
+        # if the file is already on the hard drive then skip downloading the data
+        if os.path.exists("{}/{}/{}.{}".format(DEFAULT_DIR, self.artistObj.artistName, trackObj.trackName, self.fileType)):
+            # return a list with the binary data given a value of None
+            return [trackDownloadLink, trackDownloadSize, None]
+        else:
+            # Get Binary data to write to file
+            print "[+] Downloading binary data for {}... DONOT EXIT".format(trackObj.trackName)
+            trackBinaryData = self.download(pageUrl = trackDownloadLink, binary = True)
+            return [trackDownloadLink, trackDownloadSize, trackBinaryData]
+           
+            
     def run(self):
         """The masterpiece of the class, it calls other methods of the class
         """
         print "[+] Searching songs for artiste {}. ID: {}".format(self.artistObj.artistName, self.artistObj.artist_id)
         # Get all songs for the artist
         self.searchSongs(bs(self.download(pageUrl = self.musicUrl), "html.parser"))
-        print "[+] Discovered {} songs of {}.".format(self.queue.length(), self.artistObj.artistName)
+        print "[+] Discovered {} new songs of {}.\n".format(self.queue.length(), self.artistObj.artistName)
         # Iterate throght the queue until its empty
         while not self.queue.is_empty():
             # Retrieve track Object
             trackObj = self.queue.dequeue()
-            
-            print "[+] Saving {} to {}".format(trackObj.trackName, DEFAULT_DIR)
-            # Save file to the hard disk
-            self.save(trackObj)
+            #Find the other remaining song deatails like alternate download link, size, and the binary data of the song
+            otherTrackDetails = self._getTrackDetails(trackObj)
+            trackObj.downloadLink = otherTrackDetails[0]
+            trackObj.size = otherTrackDetails[1]
+            trackObj.data = otherTrackDetails[2]
+            # Check the data attribute is None, It implies the song file was already downloaded to the hard disk 
+            if trackObj.data is not None:
+                print "[+] Saving {} to {}".format(trackObj.trackName, DEFAULT_DIR)
+                # Save file to the hard disk
+                self.save(trackObj)
+            else:
+                print "[=] {} already saved on the disk.".format(trackObj.trackName)
+            print "[+] Writing {} to  {}.tracks".format(trackObj.trackName, DB_NAME)
             # Write to Database
-            print "[+] Writing {} to {}".format(trackObj.trackName, DB_NAME)
             self.model.writeTrack(trackObj)
+            
     def splashSCreen(self):
         """Prints the program detials
         """
@@ -261,13 +279,18 @@ class Scrapper:
         print "GITHUB: {}".format(self.GITHUB_LINK)
         print "DATE PUBLISHED: {}".format(self.DATE_PUBLISHED)
         print "\n"
-scrapper = Scrapper("winnienwagi")
+# Incoporate argument parsing
+parser = ArgumentParser(description="Download music for favourite Ugandan artiste")
+parser.add_argument("-a", type=str, help="Singer's exact name", required=True)
+args = parser.parse_args()
+scrapper = Scrapper(args.a)
 # Listen for a KeyboardInterrupt Exception to exit succesfully
 try:
     scrapper.splashSCreen()
     print "Press CTRL + C to exit program."
+    print "The artiste's name should be the exact one, you may leave out any spaces in the alias"
     scrapper.run()
 except KeyboardInterrupt:
     print "[-] Process Interrupted"
     exit(0)
-        
+#There is need to fix the bug: Downloading data before counting results fetched
